@@ -1,0 +1,14 @@
+{
+  "name": "Línea de trabajo · Lubricentro",
+  "short_name": "Línea de trabajo",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#111111",
+  "theme_color": "#111111",
+  "icons": [
+    { "src": "favicon.png?v=2", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "favicon.png?v=2", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "favicon.png?v=2", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
