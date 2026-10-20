@@ -9843,6 +9843,7 @@
         busy: 0,
         ctl: null,
         focus: null,
+        last: null,
         rec: null,
         seq: 0,
         stick: 1,
@@ -16982,6 +16983,13 @@
     }
     function aiCtx() {
         // foto en vivo del taller (se rearma en cada mensaje)
+        const f = AI.focus && get(AI.focus),
+            lj = !f && AI.last ? get(AI.last) : null,
+            pre = {};
+        if (f)
+            pre.orden_en_pantalla = aiJ(f, true);
+        else if (lj)
+            pre.ultimo_vehiculo_de_la_conversacion = aiJ(lj, true);
         const act = S.jobs.filter(j => j.estado != 'completado'),
             hy = S.jobs.filter(j => j.estado == 'completado' && hoy(j.tiempos.completadoISO)),
             c = cnt(act),
@@ -16992,6 +17000,7 @@
             };
         act.sort((a, b) => (ord[a.estado] - ord[b.estado]) || cmpS(a.tiempos.ingresoISO, b.tiempos.ingresoISO));
         const cx = {
+            ...pre,
             negocio: S.cfg.negocio || '',
             ahora: new Date().toLocaleString('es-CL', {
                 weekday: 'long',
@@ -17031,10 +17040,17 @@
         };
         if (act.length > 40)
             cx.nota = 'Hay ' + act.length + ' órdenes activas; aquí van las primeras 40. Usa buscar_ordenes para el resto.';
-        const f = AI.focus && get(AI.focus);
-        if (f)
-            cx.orden_en_pantalla = aiJ(f, true);
         return JSON.stringify(cx)
+    }
+    function aiFocoTxt() {
+        const f = AI.focus && get(AI.focus),
+            l = !f && AI.last ? get(AI.last) : null,
+            j = f || l;
+        if (!j)
+            return '';
+        const v = j.vehiculo || {},
+            d = [v.version, v.motor, v.cil, v.combustible, v.anio, v.km ? v.km + ' km' : ''].filter(Boolean);
+        return `\n\nVEHÍCULO ACTUAL DE LA CONVERSACIÓN${f ? ' (orden abierta en pantalla)' : ' (último vehículo consultado)'}: ${aiLbl(j)}${d.length ? ' · ' + d.join(' · ') : ''}. Cuando la persona diga «este auto», «el vehículo», «esta orden», «ese», «le» o no nombre otro vehículo, se refiere a ESTE. No le pidas marca, modelo, año ni patente: ya los tienes (detalle completo en el contexto). Al usar buscar_repuestos, historial_vehiculo o detalle_orden para este vehículo, pasa su OT o patente.`
     }
     function aiSys() {
         return `Eres el asistente de IA de la app «Línea de trabajo» de ${S.cfg.negocio || 'un lubricentro'}. Ayudas a recepción, supervisión y mecánicos a entender y operar los procesos del taller: órdenes de trabajo, cola, pausas, tiempos, zonas y sub-zonas.
@@ -17045,11 +17061,12 @@
         - Nombra las órdenes por OT (o «SOT» si no tiene) y patente. Nunca muestres ids internos ni nombres de herramientas.
         - Para detalle (notas, bitácora, historial de un vehículo, indicadores, órdenes antiguas o fuera del contexto) llama a las herramientas de consulta.
         - Para ejecutar algo (crear orden, iniciar, pausar, completar, marcar servicios, agregar notas, asignar mecánico) llama directamente a la herramienta correspondiente: la app le pedirá confirmación a la persona. No pidas confirmación por texto antes de llamarla; solo pregunta si faltan datos obligatorios, y pregunta lo mínimo. Tras ejecutar, confirma en una línea.
+        - Para la mantención programada del fabricante (qué se hace a los 10.000, 20.000, 60.000 km, etc.) llama a buscar_mantencion: la app muestra la tabla y las fuentes; no las repitas. Usa el kilometraje de la orden y dime cuál mantención toca ahora; relaciónala con los servicios del catálogo del taller. Si falta marca, modelo o año y no hay orden en pantalla, pregunta lo mínimo.
         - Para buscar partes o repuestos de vehículos (códigos, compatibilidad, marcas, precios) llama a buscar_repuestos: la app muestra la tabla y las fuentes; no las repitas. Si falta marca, modelo o año del vehículo y no hay orden en pantalla, pregunta lo mínimo antes de buscar.
         - No puedes eliminar órdenes ni cambiar la configuración; si te lo piden, explica dónde hacerlo en la app.
         - Al crear órdenes usa los códigos y nombres del catálogo; la sub-zona es obligatoria.
         - «Atrasado» = el tiempo trabajado superó el estimado; «Por vencer» = faltan pocos minutos para el estimado. Prioriza: urgentes y atrasadas, luego por vencer, luego pausas que se puedan destrabar, luego la cola por hora de ingreso, entrega prometida o cliente que espera en el local.
-        - Si la pregunta no tiene que ver con el taller, responde en una línea y vuelve al tema.
+        - Si la pregunta no tiene que ver con el taller, responde en una línea y vuelve al tema.${aiFocoTxt()}
 
         CONTEXTO EN VIVO (se actualiza en cada mensaje):
         ${aiCtx()}`
@@ -17082,10 +17099,11 @@
                 err: 'Falta indicar la orden (OT, patente o id).'
             };
         const L = S.jobs.filter(j => !act || j.estado != 'completado'),
-            n = aiN(q);
+            n = aiN(q),
+            n2 = aiN(q.replace(/^\s*(?:s?ot|orden(?:\s+de\s+trabajo)?)\s*#?\s*/i, '').replace(/^#/, ''));
         let r = L.filter(j => j.id == q);
         if (!r.length)
-            r = L.filter(j => j.ot && aiN(j.ot) == n);
+            r = L.filter(j => j.ot && (aiN(j.ot) == n || aiN(j.ot) == n2));
         if (!r.length)
             r = L.filter(j => aiN(j.vehiculo.patente) == n);
         if (!r.length && n.length >= 3)
@@ -17113,6 +17131,7 @@
                     estado: ESTADO[j.estado]
                 }))
             };
+        AI.last = r[0].id;
         return {
             j: r[0]
         }
@@ -17191,6 +17210,7 @@
                 error: 'No hay órdenes registradas para esa patente.'
             };
         const v = L[0].vehiculo;
+        AI.last = L[0].id;
         return {
             patente: v.patente,
             vehiculo: [v.marca, v.modelo, v.version, v.anio].filter(Boolean).join(' '),
@@ -17674,11 +17694,66 @@
         }
         return r
     }
+    /* Google está retirando/limitando los gemini-2.5-* (404 intermitente desde el 16-oct-2026). Se usa SIEMPRE primero el modelo configurado;
+       solo si responde 404 se elige el Flash estable más nuevo de la clave y se reintenta. El modelo guardado NO se modifica, y el reemplazo
+       se recuerda 3 minutos para no repetir el 404 en cada paso; luego se vuelve a probar el configurado. */
+    async function aiPickModel(sig) {
+        if (AI.auto)
+            return AI.auto;
+        try {
+            const r = await fetch(GAPI + 'models?pageSize=200', {
+                headers: {
+                    'x-goog-api-key': aiKey()
+                },
+                signal: sig
+            });
+            if (!r.ok)
+                return '';
+            const d = await r.json(),
+                L = (d.models || []).filter(m => (m.supportedGenerationMethods || []).includes('generateContent')).map(m => String(m.name || '').replace(/^models\//, ''));
+            const ver = n => {
+                const x = /^gemini-(\d+(?:\.\d+)?)-flash$/.exec(n);
+                return x ? parseFloat(x[1]) : -1
+            };
+            const verL = n => {
+                const x = /^gemini-(\d+(?:\.\d+)?)-flash-lite$/.exec(n);
+                return x ? parseFloat(x[1]) : -1
+            };
+            let b = L.filter(n => verL(n) > 0).sort((a, c) => verL(c) - verL(a))[0] || L.filter(n => ver(n) > 0).sort((a, c) => ver(c) - ver(a))[0];
+            if (!b)
+                b = L.find(n => n == 'gemini-flash-latest') || L.filter(n => /^gemini-[\d.]+-flash/.test(n) && !/lite|image|tts|live|audio|omni|thinking|embed/.test(n)).sort().pop() || '';
+            return AI.auto = b || ''
+        } catch (e) {
+            if (e.name == 'AbortError')
+                throw e;
+            return ''
+        }
+    }
     async function aiFetch(method, init, first) {
+        const o = first || aiModel(),
+            c = (AI.sub || {})[o],
+            m = c && Date.now() - c.t < 18e4 ? c.m : o,
+            r = await aiFetch1(method, init, m);
+        if (r.status == 404 && m == o) {
+            const f = await aiPickModel(init.signal);
+            if (f && f != o) {
+                (AI.sub = AI.sub || {})[o] = {
+                    m: f,
+                    t: Date.now()
+                };
+                try {
+                    toast('warning', o + ' no respondió; usando ' + f + ' por ahora')
+                } catch (e) {}
+                return aiFetch1(method, init, f)
+            }
+        }
+        return r
+    }
+    async function aiFetch1(method, init, first) {
         const m0 = first || aiModel(),
-            mods = [m0],
-            fb = m0 == 'gemini-flash-latest' ? 'gemini-flash-lite-latest' : 'gemini-flash-latest';
-        mods.push(fb);
+            mods = [m0];
+        if (!/lite/i.test(m0))
+            mods.push('gemini-flash-lite-latest'); /* el respaldo es siempre un lite (cuota alta); un lite elegido por la persona no cambia de modelo */
         let r,
             r0;
         for (let mi = 0; mi < mods.length; mi++) {
@@ -17726,7 +17801,13 @@
             };
         /* ficha completa del vehículo: si viene una orden o patente se toma de la app (marca, modelo, año, versión, motor, cilindrada, combustible, chasis) */
         let vv = null;
-        const ref = a.orden || a.patente;
+        const fb = AI.focus && get(AI.focus) ? AI.focus : AI.last && get(AI.last) ? AI.last : '';
+        const ref = a.orden || a.patente || (String(a.vehiculo || '').trim() ? '' : fb);
+        if (a.orden || (!a.patente && ref))
+            a = {
+                ...a,
+                orden: a.orden || ref
+            };
         if (ref) {
             const f = aiFind(String(ref));
             if (f && f.j)
@@ -17750,7 +17831,7 @@
         Responde SOLO con una tabla en Markdown con estas columnas exactas: | Parte o repuesto | Marca | N° de parte / código | Compatibilidad | Precio referencial | Fuente |. Máximo 12 filas, una por opción concreta. Usa solo datos que encuentres en las fuentes; si un dato no aparece escribe «—». No inventes códigos, compatibilidades ni precios; indica el precio con su moneda (CLP si es de Chile). En la columna Fuente pon el nombre del sitio.${marcas.length ? `
         FILTRO DE MARCAS: incluye únicamente productos de estas marcas preferidas: ${marcas.join(', ')}. Si no encuentras ninguna de esas marcas para lo pedido, no agregues otras marcas: dilo en una sola línea después de la tabla.` : ''}
         Después de la tabla agrega como máximo 2 líneas con advertencias útiles (por ejemplo confirmar el código con el VIN).`;
-        const r = await aiFetch('generateContent', {
+        const sreq = () => ({
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -17772,7 +17853,9 @@
                 }
             }),
             signal: AI.ctl && AI.ctl.signal
-        }, /lite/i.test(aiModel()) ? 'gemini-flash-latest' : aiModel());
+        });
+        /* la búsqueda usa SIEMPRE el modelo elegido; si no la admite, se muestra el error con el nombre del modelo (sin cambiar a otro en silencio) */
+        const r = await aiFetch('generateContent', sreq(), aiModel());
         if (!r.ok) {
             let d = {};
             try {
@@ -17815,7 +17898,123 @@
             nota: 'La tabla y las fuentes ya se le muestran a la persona: NO las repitas. Comenta en una o dos líneas lo más útil (p. ej. la mejor opción o una advertencia).'
         }
     }
+    /* ---------- mantención programada (plan del fabricante a 10.000, 20.000, 60.000 km, etc.) ---------- */
+    async function aiMantencion(a) {
+        try {
+            return await aiMantencion0(a)
+        } catch (e) {
+            if (e.name == 'AbortError')
+                throw e;
+            return {
+                error: 'La búsqueda en Google falló: ' + aiErrTxt(e) + (e.status ? ' (código ' + e.status + ')' : '')
+            }
+        }
+    }
+    async function aiMantencion0(a) {
+        if (!aiKey())
+            return {
+                error: 'Falta la API key de Gemini.'
+            };
+        const fb = AI.focus && get(AI.focus) ? AI.focus : AI.last && get(AI.last) ? AI.last : '',
+            ref = a.orden || a.patente || (String(a.vehiculo || '').trim() ? '' : fb);
+        let vv = null,
+            jj = null;
+        if (ref) {
+            const f = aiFind(String(ref));
+            if (f && f.j) {
+                jj = f.j;
+                vv = f.j.vehiculo
+            } else {
+                const n = aiN(ref),
+                    L = S.jobs.filter(j => aiN(j.vehiculo.patente) == n).sort((x, y) => cmpS(y.tiempos.ingresoISO, x.tiempos.ingresoISO));
+                if (L.length) {
+                    jj = L[0];
+                    vv = L[0].vehiculo
+                }
+            }
+        }
+        const fic = vv ? [['Marca', vv.marca], ['Modelo', vv.modelo], ['Año', vv.anio], ['Versión', vv.version], ['Motor', vv.motor], ['Cilindrada', vv.cil], ['Combustible', vv.combustible], ['Chasis (VIN)', jj && jj.opciones && jj.opciones.vin || '']] : [];
+        const veh = [fic.filter(x => x[1]).map(x => x[0] + ': ' + x[1]).join(' · '), String(a.vehiculo || '').trim()].filter(Boolean).join(' · ');
+        if (!veh)
+            return {
+                error: 'Faltan los datos del vehículo (marca, modelo y año). Pregúntaselos a la persona o pide la OT/patente de una orden.'
+            };
+        const kmA = +a.km_actual > 0 ? +a.km_actual : (vv && +vv.km > 0 ? +vv.km : 0),
+            kmO = +a.km_objetivo > 0 ? +a.km_objetivo : 0,
+            faltan = fic.filter(x => !x[1] && x[0] != 'Chasis (VIN)').map(x => x[0]);
+        const prompt = `Eres un asistente técnico de mantención automotriz para un lubricentro en Chile. Busca en la web información actual y confiable sobre el PLAN DE MANTENCIÓN PROGRAMADA del fabricante (intervalos por kilometraje y/o tiempo) de este vehículo.
+        VEHÍCULO EXACTO → ${veh}.${faltan.length ? ' Datos que faltan en la ficha: ' + faltan.join(', ') + ' (menciónalo en la advertencia final).' : ''}
+        ${kmA ? 'Kilometraje actual del vehículo: ' + kmA.toLocaleString('es-CL') + ' km. Marca en la columna Observaciones cuál es la mantención que corresponde ahora (la más cercana por debajo o por encima del kilometraje) escribiendo «TOCA AHORA», y «VENCIDA» para las anteriores que podrían estar pendientes si no hay registro.' : 'No se conoce el kilometraje actual: presenta el plan completo.'}${kmO ? '\nLa persona pregunta específicamente por la mantención de los ' + kmO.toLocaleString('es-CL') + ' km: detalla esa fila con el mayor nivel de detalle posible y muestra también las dos más cercanas.' : ''}${a.consulta ? '\nConsulta puntual: ' + String(a.consulta).trim() : ''}
+        Responde SOLO con una tabla en Markdown con estas columnas exactas: | Kilometraje (y/o tiempo) | Trabajos de mantención | Aceite, filtros y fluidos (especificación) | Observaciones | Fuente |. Una fila por hito del plan (por ejemplo 10.000, 20.000, 30.000 km… hasta 120.000 km o hasta donde el fabricante lo indique). Usa solo datos que encuentres en las fuentes; si un dato no aparece escribe «—». No inventes intervalos, capacidades ni especificaciones. Si el plan encontrado es de otro mercado o de otra versión/motor, dilo en Observaciones. En la columna Fuente pon el nombre del sitio. Máximo 14 filas.
+        Después de la tabla agrega como máximo 2 líneas con advertencias útiles (por ejemplo uso severo, confirmar con el manual del propietario o con el VIN).`;
+        const sreq = () => ({
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-goog-api-key': aiKey()
+            },
+            body: JSON.stringify({
+                contents: [{
+                    role: 'user',
+                    parts: [{
+                        text: prompt
+                    }]
+                }],
+                tools: [{
+                    google_search: {}
+                }],
+                generationConfig: {
+                    temperature: .2,
+                    maxOutputTokens: 8192
+                }
+            }),
+            signal: AI.ctl && AI.ctl.signal
+        });
+        const r = await aiFetch('generateContent', sreq(), aiModel());
+        if (!r.ok) {
+            let d = {};
+            try {
+                d = await r.json()
+            } catch (e) {}
+            const er = new Error(d.error && d.error.message || 'HTTP ' + r.status);
+            er.status = r.status;
+            throw er
+        }
+        const j = await r.json(),
+            c = j.candidates && j.candidates[0],
+            txt = ((c && c.content && c.content.parts) || []).filter(p => p.text != null && !p.thought).map(p => p.text).join('').trim();
+        if (!txt)
+            return {
+                error: 'Google no devolvió resultados para esa búsqueda.'
+            };
+        const seen = new Set(),
+            F = [];
+        for (const g of ((c.groundingMetadata && c.groundingMetadata.groundingChunks) || [])) {
+            const w = g.web;
+            if (!w || !w.uri || seen.has(w.uri))
+                continue;
+            seen.add(w.uri);
+            F.push({
+                title: w.title || '',
+                uri: w.uri
+            })
+        }
+        aiAdd({
+            r: 's',
+            text: txt,
+            fuentes: F.slice(0, 12),
+            marcas: []
+        });
+        return {
+            mostrado_al_usuario: true,
+            fuentes_encontradas: F.length,
+            km_actual: kmA || null,
+            tabla: txt.slice(0, 3500),
+            nota: 'La tabla y las fuentes ya se le muestran a la persona: NO las repitas. Comenta en una o dos líneas qué mantención toca ahora según el kilometraje y, si corresponde, qué servicios del catálogo del taller podrían ofrecerse.'
+        }
+    }
     const AIRD = {
+            buscar_mantencion: aiMantencion,
             buscar_repuestos: aiRepuestos,
             buscar_ordenes: aiBuscar,
             detalle_orden: aiDetalle,
@@ -17823,6 +18022,7 @@
             kpis: aiKpis
         },
         AILB = {
+            buscar_mantencion: 'Buscando el plan de mantención en Google',
             buscar_repuestos: 'Buscando repuestos en Google',
             buscar_ordenes: 'Buscando órdenes',
             detalle_orden: 'Revisando el detalle de la orden',
@@ -17868,6 +18068,24 @@
                     type: 'integer',
                     description: 'Máximo de resultados, 1 a 60 (por defecto 25)'
                 }
+            })
+        },
+        {
+            name: 'buscar_mantencion',
+            description: 'Busca en Google el plan de mantención programada del fabricante para un vehículo (qué se hace a los 10.000, 20.000, 60.000 km, etc.: aceite, filtros, fluidos, revisiones) y muestra a la persona una tabla con las fuentes. Marca cuál toca ahora según el kilometraje. Úsala cuando pregunten por mantención programada, pauta de mantención, qué toca a cierto kilometraje o qué sigue.',
+            parameters: o({
+                orden: s('OT, patente o id de la orden del vehículo: la app toma sola marca, modelo, año, versión, motor y kilometraje. Pásala SIEMPRE que se hable de un vehículo de la línea de trabajo'),
+                patente: s('Patente del vehículo si no hay orden'),
+                vehiculo: s('Datos del vehículo (marca, modelo, año, versión, motor, combustible) si no hay orden ni patente'),
+                km_actual: {
+                    type: 'number',
+                    description: 'Kilometraje actual si la persona lo indica o no está en la orden'
+                },
+                km_objetivo: {
+                    type: 'number',
+                    description: 'Kilometraje puntual por el que preguntan (por ejemplo 60000)'
+                },
+                consulta: s('Detalle adicional de lo que quieren saber')
             })
         },
         {
@@ -18530,6 +18748,7 @@
         c.title = c.title || String(u.text).replace(/\s+/g, ' ').trim().slice(0, 70);
         c.ts = Date.now();
         c.focus = AI.focus || null;
+        c.last = AI.last || null;
         c.hist = AI.hist;
         c.msgs = AI.msgs.filter(m => m.r != 't' && m.r != 'e').map(m => ({
             r: m.r,
@@ -18565,6 +18784,7 @@
     ['Mensaje al cliente', 'Redacta un mensaje corto de WhatsApp para el cliente de esta orden contándole el estado actual y cuánto falta aproximadamente. Español de Chile, cordial, sin inventar datos ni precios.'],
     ['¿Qué falta?', '¿Qué falta para dejar esta orden lista para entregar? Si algo la está bloqueando, propón el siguiente paso.'],
     ['Servicios sugeridos', 'Según el vehículo (marca, modelo, año, km) y su historial en el taller, sugiere servicios o revisiones del catálogo que valga la pena ofrecer al cliente, con una razón breve para cada uno.'],
+    ['Mantención programada', 'Busca en Google el plan de mantención programada del fabricante para este vehículo (10.000, 20.000, 60.000 km, etc.), dime cuál toca según su kilometraje actual y qué servicios del catálogo conviene ofrecer.'],
     ['Buscar repuestos', 'Busca en Google los repuestos y partes que necesita este vehículo para los servicios de esta orden (códigos y compatibilidad) y muéstralos en una tabla con sus fuentes.'],
     ['Nota de entrega', 'Redacta una nota breve y profesional para dejar registrada en la orden con lo realizado hasta ahora.']
     ] : [
@@ -18573,6 +18793,7 @@
     ['Pausas y repuestos', 'Revisa las órdenes en pausa y las solicitudes de repuestos pendientes: ¿qué se puede destrabar ahora y qué debo gestionar?'],
     ['Carga del taller', '¿Cómo está la carga por taller y por mecánico? ¿Hay sub-zonas libres o mecánicos con poca carga para mover la cola?'],
     ['Informe del día', 'Prepara el informe del día: ingresadas, completadas, puntualidad, tiempos reales vs estimados, por mecánico, pausas por motivo y reaperturas. Cierra con 2 o 3 observaciones útiles.'],
+    ['Mantención programada', 'Quiero consultar la mantención programada de un vehículo (por ejemplo la de los 60.000 km). Pregúntame el vehículo (marca, modelo, año) y el kilometraje.'],
     ['Buscar repuestos', 'Quiero buscar un repuesto. Pregúntame el vehículo (marca, modelo, año) y la parte que necesito.'],
     ['Ingresar orden', 'Quiero ingresar una orden nueva. Pregúntame lo que falte.']];
     function aiChrome() {
@@ -18583,8 +18804,8 @@
         const pn = $('#aichat');
         if (pn)
             pn.classList.toggle('hv', !!AI.hv);
-        sub.textContent = AI.hv ? 'Historial de conversaciones' : aiModel() + (aiPerm() == 'lectura' ? ' · solo lectura' : '');
-        if (AI.focus && !get(AI.focus))
+        sub.textContent = AI.hv ? 'Historial de conversaciones' : (AI.lm && AI.lm != aiModel() ? aiModel() + ' → usó ' + AI.lm : aiModel()) + (aiPerm() == 'lectura' ? ' · solo lectura' : '');
+        if (AI.focus && S.jobs.length && !get(AI.focus))
             AI.focus = null;
         const f = AI.focus && get(AI.focus);
         $('#ai-fo').innerHTML = f ? `<div class="ai-f">${ic('directions_car')}<span>${esc(aiLbl(f))}</span><button data-ai="unf" title="Quitar orden" aria-label="Quitar orden">${ic('close')}</button></div>` : '';
@@ -18606,10 +18827,19 @@
     function aiOpen(fid, prompt) {
         if (MODO != 'admin')
             return;
-        if (fid !== undefined)
-            AI.focus = fid || null;
+        if (fid && fid !== AI.focus && AI.msgs.some(m => m.r == 'u')) {
+            try {
+                aiPersist()
+            } catch (e) {}
+            AI.msgs = [];
+            AI.hist = [];
+            AI.cid = null;
+            AI.last = null
+        } // otra orden = otra conversación (no mezclar vehículos)
+        if (fid !== undefined && fid !== null)
+            AI.focus = fid;
         AI.hv = 0;
-        if (AI.focus && !get(AI.focus))
+        if (AI.focus && S.jobs.length && !get(AI.focus))
             AI.focus = null;
         AI.open = 1;
         AI.stick = 1;
@@ -18697,6 +18927,7 @@
             AI.msgs = [];
             AI.hist = [];
             AI.cid = null;
+            AI.last = null;
             AI.hv = 0;
             AI.stick = 1;
             aiChrome();
@@ -18728,6 +18959,7 @@
             AI.hist = o.h;
             AI.cid = c.id;
             AI.focus = c.focus && get(c.focus) ? c.focus : null;
+            AI.last = c.last && get(c.last) ? c.last : null;
             AI.hv = 0;
             AI.stick = 1;
             aiChrome();
@@ -18860,7 +19092,7 @@
             $('#ai-mic').style.display = 'none';
         f.addEventListener('click', () => {
             navigator.vibrate?.(8);
-            aiOpen(null)
+            aiOpen()
         });
         p.addEventListener('click', e => {
             const b = e.target.closest('[data-ai]');
